@@ -4,6 +4,12 @@
 # It mirrors the boot and root partitions using rsync with --delete for a true restoration.
 # WARNING: This will overwrite the contents of the NVMe SSD!
 
+# Check for --yes or -y flag
+AUTO_CONFIRM=false
+for arg in "$@"; do
+    [[ "$arg" == "--yes" || "$arg" == "-y" ]] && AUTO_CONFIRM=true
+done
+
 # Check if we are booted from NVMe root filesystem
 CURRENT_ROOT=$(findmnt -n -o SOURCE /)
 echo "Current root device: $CURRENT_ROOT"
@@ -13,11 +19,15 @@ if [[ "$CURRENT_ROOT" != /dev/nvme* ]]; then
     exit 1
 fi
 
-# Prompt for confirmation
-read -p "WARNING: This will completely overwrite the contents of / and /boot/firmware from the SD card. Continue? (y/n): " confirm
-if [[ "$confirm" != "y" ]]; then
-    echo "Aborted."
-    exit 1
+# Confirm before continuing
+if ! $AUTO_CONFIRM; then
+    read -p "WARNING: This will completely overwrite the contents of / and /boot/firmware from the SD card. Continue? (y/n): " confirm < /dev/tty
+    if [[ "${confirm,,}" != "y" ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+else
+    echo "--yes flag detected, proceeding without prompt..."
 fi
 
 # Define devices (change these if needed)
@@ -81,9 +91,28 @@ sudo cat /boot/firmware/cmdline.txt
 echo "Updated fstab:"
 sudo cat /etc/fstab
 
-# Prompt for reboot confirmation
-read -p "Restore complete. A reboot is required to apply changes. Reboot now? (y/n): " reboot_confirm
-if [[ "$reboot_confirm" == "y" || "$reboot_confirm" == "Y" ]]; then
+# Prompt for reboot (if not auto-confirmed)
+if $AUTO_CONFIRM; then
+    REBOOT=true
+else
+    read -p "Restore complete. A reboot is required to apply changes. Reboot now? (y/n): " reboot_confirm < /dev/tty
+    if [[ "${reboot_confirm,,}" == "y" ]]; then
+        REBOOT=true
+    else
+        REBOOT=false
+        echo "Reboot skipped. Please remember to reboot later to apply the changes."
+    fi
+fi
+
+# Self-delete the script before rebooting or exiting
+SCRIPT_PATH="$(realpath "$0")"
+if [[ -f "$SCRIPT_PATH" ]]; then
+    echo "Deleting script: $SCRIPT_PATH"
+    rm -f "$SCRIPT_PATH"
+fi
+
+# Reboot if confirmed or auto-approved
+if [[ "$REBOOT" == true ]]; then
     sudo reboot
 else
     echo "Reboot skipped. Please remember to reboot later to apply the changes."
