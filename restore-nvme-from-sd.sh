@@ -37,25 +37,18 @@ NVME_BOOT=/dev/nvme0n1p1
 NVME_ROOT=/dev/nvme0n1p2
 
 # Mount SD card partitions
-sudo mkdir -p /mnt/sd-boot
-sudo mkdir -p /mnt/sd-root
+sudo mkdir -p /mnt/sd-boot /mnt/sd-root
 sudo mount $SD_BOOT /mnt/sd-boot
 sudo mount $SD_ROOT /mnt/sd-root
 
-# OPTIONAL: Format NVMe partitions (uncomment if needed)
-# echo "Formatting NVMe partitions..."
-# sudo mkfs.vfat -F32 $NVME_BOOT
-# sudo mkfs.ext4 $NVME_ROOT
-
-# Mount NVMe partitions (assuming they are already mounted by the system)
-# If not mounted, you may mount them manually here (optional step)
-
-# Rsync SD card contents to NVMe (true mirror)
+# Rsync SD → NVMe with identical progress display
 echo "Restoring root filesystem..."
-sudo rsync -aAXv --delete --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} /mnt/sd-root/ /
+sudo rsync -aAXvh --delete --info=progress2 \
+    --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} \
+    /mnt/sd-root/ /
 
 echo "Restoring boot partition..."
-sudo rsync -aAXv --delete /mnt/sd-boot/ /boot/firmware/
+sudo rsync -aAXvh --delete --info=progress2 /mnt/sd-boot/ /boot/firmware/
 
 # Get updated PARTUUIDs
 BOOT_PARTUUID=$(blkid -s PARTUUID -o value $NVME_BOOT)
@@ -65,24 +58,17 @@ ROOT_PARTUUID=$(blkid -s PARTUUID -o value $NVME_ROOT)
 echo "Boot PARTUUID: $BOOT_PARTUUID"
 echo "Root PARTUUID: $ROOT_PARTUUID"
 
-# Backup existing config files
+# Backup and update config files
 sudo cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.bak
 sudo cp /etc/fstab /etc/fstab.bak
 
-# Update cmdline.txt
-echo "Updating cmdline.txt..."
 sudo sed -i "s|root=PARTUUID=[^ ]*|root=PARTUUID=$ROOT_PARTUUID|" /boot/firmware/cmdline.txt
-
-# Update fstab
-echo "Updating fstab..."
 sudo sed -i "s|PARTUUID=[^ ]*  /boot/firmware  vfat|PARTUUID=$BOOT_PARTUUID  /boot/firmware  vfat|" /etc/fstab
 sudo sed -i "s|PARTUUID=[^ ]*  /               ext4|PARTUUID=$ROOT_PARTUUID  /               ext4|" /etc/fstab
 
 # Unmount SD card
-sudo umount /mnt/sd-boot
-sudo umount /mnt/sd-root
-sudo rmdir /mnt/sd-boot
-sudo rmdir /mnt/sd-root
+sudo umount /mnt/sd-boot /mnt/sd-root
+sudo rmdir /mnt/sd-boot /mnt/sd-root
 
 # Show updated files for verification
 echo "Updated cmdline.txt:"
@@ -91,7 +77,7 @@ sudo cat /boot/firmware/cmdline.txt
 echo "Updated fstab:"
 sudo cat /etc/fstab
 
-# Prompt for reboot (if not auto-confirmed)
+# Prompt for reboot
 if $AUTO_CONFIRM; then
     REBOOT=true
 else
@@ -104,16 +90,15 @@ else
     fi
 fi
 
-# Self-delete the script before rebooting or exiting
+# Self-delete the script
 SCRIPT_PATH="$(realpath "$0")"
 if [[ -f "$SCRIPT_PATH" ]]; then
     echo "Deleting script: $SCRIPT_PATH"
     rm -f "$SCRIPT_PATH"
 fi
 
-# Reboot if confirmed or auto-approved
 if [[ "$REBOOT" == true ]]; then
     sudo reboot
 else
-    echo "Reboot skipped. Please remember to reboot later to apply the changes."
+    echo "Reboot skipped. Please remember to reboot later."
 fi
