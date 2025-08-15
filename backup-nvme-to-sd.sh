@@ -4,10 +4,12 @@
 # It mirrors the boot and root partitions using rsync with --delete for a true backup.
 # WARNING: This will overwrite the contents of the SD card!
 
-# Check for --yes or -y flag
+# Parse command-line flags: --yes/-y to skip confirmation, --force/-f to skip change check
 AUTO_CONFIRM=false
+FORCE=false
 for arg in "$@"; do
     [[ "$arg" == "--yes" || "$arg" == "-y" ]] && AUTO_CONFIRM=true
+    [[ "$arg" == "--force" || "$arg" == "-f" ]] && FORCE=true
 done
 
 # Check if we are booted from NVMe root filesystem
@@ -40,6 +42,26 @@ NVME_ROOT=/dev/nvme0n1p2
 sudo mkdir -p /mnt/sd-boot /mnt/sd-root
 sudo mount $SD_BOOT /mnt/sd-boot
 sudo mount $SD_ROOT /mnt/sd-root
+
+# Check if backup is needed
+if ! $FORCE; then
+    echo "Checking for changes before backup..."
+    ROOT_DIFF=$(sudo rsync -aAXvh --delete --dry-run --itemize-changes \
+        --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} \
+        / /mnt/sd-root/ | grep -E '^[><c]')
+    BOOT_DIFF=$(sudo rsync -aAXvh --delete --dry-run --itemize-changes \
+        /boot/firmware/ /mnt/sd-boot/ | grep -E '^[><c]')
+
+    if [[ -z "$ROOT_DIFF" && -z "$BOOT_DIFF" ]]; then
+        echo "No changes detected. Backup not needed."
+        sudo umount /mnt/sd-boot /mnt/sd-root
+        sudo rmdir /mnt/sd-boot /mnt/sd-root
+        exit 0
+    fi
+    echo "Changes detected, proceeding with backup..."
+else
+    echo "--force flag detected, skipping change check..."
+fi
 
 # Rsync NVMe → SD card with identical progress display
 echo "Backing up root filesystem..."

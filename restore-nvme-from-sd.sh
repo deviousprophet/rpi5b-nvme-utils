@@ -4,10 +4,12 @@
 # It mirrors the boot and root partitions using rsync with --delete for a true restoration.
 # WARNING: This will overwrite the contents of the NVMe SSD!
 
-# Check for --yes or -y flag
+# Parse command-line flags: --yes/-y to skip confirmation, --force/-f to skip change check
 AUTO_CONFIRM=false
+FORCE=false
 for arg in "$@"; do
     [[ "$arg" == "--yes" || "$arg" == "-y" ]] && AUTO_CONFIRM=true
+    [[ "$arg" == "--force" || "$arg" == "-f" ]] && FORCE=true
 done
 
 # Check if we are booted from NVMe root filesystem
@@ -41,6 +43,26 @@ sudo mkdir -p /mnt/sd-boot /mnt/sd-root
 sudo mount $SD_BOOT /mnt/sd-boot
 sudo mount $SD_ROOT /mnt/sd-root
 
+# Check if restore is needed
+if ! $FORCE; then
+    echo "Checking for changes before restoration..."
+    ROOT_DIFF=$(sudo rsync -aAXvh --delete --dry-run --itemize-changes \
+        --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} \
+        /mnt/sd-root/ / | grep -E '^[><c]')
+    BOOT_DIFF=$(sudo rsync -aAXvh --delete --dry-run --itemize-changes \
+        /mnt/sd-boot/ /boot/firmware/ | grep -E '^[><c]')
+
+    if [[ -z "$ROOT_DIFF" && -z "$BOOT_DIFF" ]]; then
+        echo "No changes detected. Restore not needed."
+        sudo umount /mnt/sd-boot /mnt/sd-root
+        sudo rmdir /mnt/sd-boot /mnt/sd-root
+        exit 0
+    fi
+    echo "Changes detected, proceeding with restoration..."
+else
+    echo "--force flag detected, skipping change check..."
+fi
+
 # Rsync SD → NVMe with identical progress display
 echo "Restoring root filesystem..."
 sudo rsync -aAXvh --delete --info=progress2 \
@@ -50,13 +72,12 @@ sudo rsync -aAXvh --delete --info=progress2 \
 echo "Restoring boot partition..."
 sudo rsync -aAXvh --delete --info=progress2 /mnt/sd-boot/ /boot/firmware/
 
-# Get updated PARTUUIDs
+# Get updated PARTUUIDs for the NVMe SSD
 BOOT_PARTUUID=$(blkid -s PARTUUID -o value $NVME_BOOT)
 ROOT_PARTUUID=$(blkid -s PARTUUID -o value $NVME_ROOT)
 
-# Show found PARTUUIDs
-echo "Boot PARTUUID: $BOOT_PARTUUID"
-echo "Root PARTUUID: $ROOT_PARTUUID"
+echo "NVMe Boot PARTUUID: $BOOT_PARTUUID"
+echo "NVMe Root PARTUUID: $ROOT_PARTUUID"
 
 # Backup and update config files
 sudo cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.bak
@@ -70,12 +91,13 @@ sudo sed -i "s|PARTUUID=[^ ]*  /               ext4|PARTUUID=$ROOT_PARTUUID  /  
 sudo umount /mnt/sd-boot /mnt/sd-root
 sudo rmdir /mnt/sd-boot /mnt/sd-root
 
-# Show updated files for verification
+# Show updated config files for verification
 echo "Updated cmdline.txt:"
 sudo cat /boot/firmware/cmdline.txt
-
+echo
 echo "Updated fstab:"
 sudo cat /etc/fstab
+echo
 
 # Prompt for reboot
 if $AUTO_CONFIRM; then
